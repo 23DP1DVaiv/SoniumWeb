@@ -7,6 +7,7 @@ class AlbumLibrary {
         this.contactEmail = 'your@email.com'; // Required by MusicBrainz
         this.musicBrainzApiBase = 'https://musicbrainz.org/ws/2';
         this.coverArtApiBase = 'https://coverartarchive.org';
+        this.apiBase = '/api'; // Base URL for our own server API
         this.updateInterval = 24 * 60 * 60 * 1000; // Update daily (in milliseconds)
         this.albums = [];
         this.lastUpdated = null;
@@ -19,7 +20,7 @@ class AlbumLibrary {
         // Load albums from local storage first for immediate display
         this.loadFromLocalStorage();
         
-        // Then check for updates from API
+        // Then check for updates from our own API which accesses the database
         await this.updateLibrary();
         
         // Set up automatic updates
@@ -62,22 +63,67 @@ class AlbumLibrary {
             
             console.log('Updating album library...');
             
-            // Fetch new releases from MusicBrainz
-            const newReleases = await this.fetchNewReleases();
+            // Fetch new releases from our own API which accesses the database
+            const newReleases = await this.fetchAlbumsFromDatabase();
             
-            // Merge new releases with existing library
-            await this.mergeAlbums(newReleases);
-            
-            // Update timestamp and save to local storage
-            this.lastUpdated = now.toISOString();
-            this.saveToLocalStorage();
-            
-            // Update the UI
-            this.renderAlbums(this.albums);
-            
-            console.log(`Library updated: ${this.albums.length} albums available`);
+            if (newReleases.length > 0) {
+                // Replace the albums array with data from our database
+                this.albums = newReleases;
+                
+                // Update timestamp and save to local storage
+                this.lastUpdated = now.toISOString();
+                this.saveToLocalStorage();
+                
+                // Update the UI
+                this.renderAlbums(this.albums);
+                
+                console.log(`Library updated: ${this.albums.length} albums available`);
+            } else {
+                // If we couldn't get albums from our database, fall back to MusicBrainz
+                const musicBrainzReleases = await this.fetchNewReleases();
+                
+                // Merge new releases with existing library
+                await this.mergeAlbums(musicBrainzReleases);
+                
+                // Update timestamp and save to local storage
+                this.lastUpdated = now.toISOString();
+                this.saveToLocalStorage();
+                
+                // Update the UI
+                this.renderAlbums(this.albums);
+                
+                console.log(`Library updated from MusicBrainz: ${this.albums.length} albums available`);
+            }
         } catch (error) {
             console.error('Failed to update library:', error);
+        }
+    }
+    
+    async fetchAlbumsFromDatabase() {
+        try {
+            // Fetch albums from our server API which queries the database
+            const response = await fetch(`${this.apiBase}/albums/recent`);
+            
+            if (!response.ok) {
+                throw new Error(`API error: ${response.status} ${response.statusText}`);
+            }
+            
+            const albums = await response.json();
+            
+            // Process albums to match our album structure
+            return albums.map(album => ({
+                id: album.mbid, // Use MusicBrainz ID for consistency
+                title: album.title,
+                artist: album.artist,
+                artist_id: album.artist_mbid,
+                cover_url: album.cover_image_url || '/images/placeholder-album.jpg',
+                release_date: album.release_date || 'Unknown',
+                rating: album.average_rating || (3.5 + Math.random() * 1.5), // Use rating from DB if available or generate
+                db_id: album.id // Store the database ID as well
+            }));
+        } catch (error) {
+            console.error('Error fetching albums from database:', error);
+            return [];
         }
     }
     
@@ -110,22 +156,33 @@ class AlbumLibrary {
     
     async getCoverArtForRelease(mbid) {
         try {
-            const response = await fetch(`${this.coverArtApiBase}/release/${mbid}`, {
+            // First check if we have this cover in our database
+            const response = await fetch(`${this.apiBase}/albums/cover/${mbid}`);
+            
+            if (response.ok) {
+                const data = await response.json();
+                if (data && data.cover_image_url) {
+                    return data.cover_image_url;
+                }
+            }
+            
+            // If not in our database, try to get it from Cover Art Archive
+            const coverResponse = await fetch(`${this.coverArtApiBase}/release/${mbid}`, {
                 headers: {
                     'User-Agent': `${this.appName}/${this.appVersion} (${this.contactEmail})`
                 }
             });
             
-            if (!response.ok) {
+            if (!coverResponse.ok) {
                 // Cover art might not be available for all releases
                 return null;
             }
             
-            const data = await response.json();
+            const coverData = await coverResponse.json();
             
             // Return front image URL if available
-            if (data && data.images && data.images.length > 0) {
-                const frontImage = data.images.find(img => img.front) || data.images[0];
+            if (coverData && coverData.images && coverData.images.length > 0) {
+                const frontImage = coverData.images.find(img => img.front) || coverData.images[0];
                 return frontImage.image;
             }
             
@@ -231,9 +288,12 @@ class AlbumLibrary {
         card.className = 'album-card';
         card.dataset.id = album.id;
         
+        // Handle cover image loading
+        const coverUrl = album.cover_url || '/images/placeholder-album.jpg';
+        
         card.innerHTML = `
             <div class="album-cover">
-                <img src="${album.cover_url}" alt="${album.title}">
+                <img src="${coverUrl}" alt="${album.title}" onerror="this.src='/images/placeholder-album.jpg'">
                 <div class="album-rating">${album.rating.toFixed(1)}</div>
             </div>
             <div class="album-info">
@@ -252,7 +312,18 @@ class AlbumLibrary {
         console.log(`Show details for album: ${albumId}`);
         
         try {
-            // Fetch detailed album information from MusicBrainz
+            // First try to get album details from our own API/database
+            const response = await fetch(`${this.apiBase}/albums/details/${albumId}`);
+            
+            if (response.ok) {
+                const albumDetails = await response.json();
+                
+                // Display album details from our database
+                this.displayAlbumDetails(albumDetails);
+                return;
+            }
+            
+            // If not in our database, fall back to MusicBrainz
             const albumDetails = await this.musicBrainzRequest(`/release/${albumId}`, {
                 inc: 'recordings+artists+labels+url-rels+tags'
             });
@@ -269,6 +340,10 @@ class AlbumLibrary {
             const artistName = albumDetails['artist-credit']?.[0]?.artist?.name || 'Unknown Artist';
             const releaseDate = albumDetails.date || 'Unknown date';
             const label = albumDetails['label-info']?.[0]?.label?.name || 'Unknown label';
+            
+            // Get cover art URL (might be already cached in our list)
+            const album = this.albums.find(a => a.id === albumId);
+            const coverUrl = album?.cover_url || '/images/placeholder-album.jpg';
             
             // Get tags if available
             let tagsText = 'No tags available';
@@ -294,6 +369,55 @@ class AlbumLibrary {
             console.error('Error fetching album details:', error);
             alert('Error loading album details. Please try again later.');
         }
+    }
+    
+    displayAlbumDetails(albumDetails) {
+        // Create a better formatted display for album details
+        // This could be replaced with a modal or a dedicated page in a real app
+        
+        // Format tracks if available
+        let tracksHtml = '<p>No tracks available</p>';
+        if (albumDetails.tracks && albumDetails.tracks.length > 0) {
+            tracksHtml = '<ol class="album-tracks">';
+            albumDetails.tracks.forEach(track => {
+                tracksHtml += `<li>${track.title}</li>`;
+            });
+            tracksHtml += '</ol>';
+        }
+        
+        // Format genres if available
+        const genresText = albumDetails.genres && albumDetails.genres.length > 0 
+            ? albumDetails.genres.join(', ') 
+            : 'No genres available';
+        
+        // Create modal content
+        const modalHtml = `
+            <div class="album-detail-modal">
+                <div class="album-detail-header">
+                    <img src="${albumDetails.cover_image_url || '/images/placeholder-album.jpg'}" 
+                         alt="${albumDetails.title}" 
+                         onerror="this.src='/images/placeholder-album.jpg'">
+                    <div class="album-detail-info">
+                        <h2>${albumDetails.title}</h2>
+                        <h3>by ${albumDetails.artist}</h3>
+                        <p>Released: ${albumDetails.release_date || 'Unknown'}</p>
+                        <p>Label: ${albumDetails.label || 'Unknown'}</p>
+                        <p>Genres: ${genresText}</p>
+                        <div class="album-rating large">
+                            ${(albumDetails.average_rating || 0).toFixed(1)}
+                        </div>
+                    </div>
+                </div>
+                <div class="album-detail-tracks">
+                    <h3>Tracks</h3>
+                    ${tracksHtml}
+                </div>
+            </div>
+        `;
+        
+        // For now, just use an alert for simplicity
+        // In a real app, this would be a modal or a new page
+        alert(`Album: ${albumDetails.title}\nArtist: ${albumDetails.artist}\nRelease Date: ${albumDetails.release_date || 'Unknown'}\nLabel: ${albumDetails.label || 'Unknown'}\n\nGenres: ${genresText}\n\nRating: ${(albumDetails.average_rating || 0).toFixed(1)}/5.0`);
     }
     
     setupEventListeners() {
@@ -344,7 +468,7 @@ class AlbumLibrary {
             return;
         }
         
-        // First try local search
+        // First try to search our local album collection
         const localResults = this.albums.filter(album => {
             const titleMatch = album.title.toLowerCase().includes(query.toLowerCase());
             const artistMatch = album.artist.toLowerCase().includes(query.toLowerCase());
@@ -357,8 +481,59 @@ class AlbumLibrary {
             return;
         }
         
-        // If no local results, try to search via MusicBrainz API
-        this.searchMusicBrainz(query);
+        // If no local results, try to search via our own API
+        this.searchAlbums(query);
+    }
+    
+    async searchAlbums(query) {
+        try {
+            console.log(`Searching albums for: ${query}`);
+            
+            // Show loading state
+            const container = document.querySelector('.albums-grid');
+            if (container) {
+                container.innerHTML = '<div class="loading">Searching for albums...</div>';
+            }
+            
+            // First try our own database
+            const response = await fetch(`${this.apiBase}/albums/search?query=${encodeURIComponent(query)}`);
+            
+            if (response.ok) {
+                const data = await response.json();
+                
+                if (data && data.length > 0) {
+                    // Process the results
+                    const searchResults = data.map(album => ({
+                        id: album.mbid,
+                        title: album.title,
+                        artist: album.artist,
+                        artist_id: album.artist_mbid,
+                        cover_url: album.cover_image_url || '/images/placeholder-album.jpg',
+                        release_date: album.release_date || 'Unknown',
+                        rating: album.average_rating || (3.5 + Math.random() * 1.5),
+                        db_id: album.id
+                    }));
+                    
+                    // Display search results
+                    this.renderAlbums(searchResults);
+                    
+                    // Add these albums to our library for local caching
+                    await this.mergeAlbums(searchResults);
+                    this.saveToLocalStorage();
+                    
+                    return;
+                }
+            }
+            
+            // If no results or API error, fall back to MusicBrainz
+            await this.searchMusicBrainz(query);
+            
+        } catch (error) {
+            console.error('Error searching albums:', error);
+            
+            // Fall back to MusicBrainz search
+            await this.searchMusicBrainz(query);
+        }
     }
     
     async searchMusicBrainz(query) {

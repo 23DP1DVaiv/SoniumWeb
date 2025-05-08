@@ -26,7 +26,7 @@ const pool = new Pool({
 // MusicBrainz API configuration
 const MUSICBRAINZ_API_BASE = 'https://musicbrainz.org/ws/2';
 const COVER_ART_ARCHIVE_API = 'https://coverartarchive.org';
-const USER_AGENT = 'Sonium/1.0.0 (your@email.com)'; // Required by MusicBrainz
+const USER_AGENT = 'Sonium/1.0.0 (sonium.info@gmail.com)'; // Required by MusicBrainz
 
 // Database initialization
 async function initDatabase() {
