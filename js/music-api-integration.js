@@ -242,4 +242,194 @@ class MusicAPIManager {
         const processedAlbums = [];
         
         // Use Promise.all for parallel processing
-        const promises = spotifyNewReleases.albums.items.map(async (
+        const promises = spotifyNewReleases.albums.items.map(async (album) => {
+            try {
+                // Get basic information from the Spotify release
+                const basicData = {
+                    id: album.id,
+                    title: album.name,
+                    artist: album.artists[0].name,
+                    cover_url: album.images[0]?.url || '',
+                    release_date: album.release_date,
+                    rating: 0 // Will be calculated from Last.fm data
+                };
+                
+                // Try to get Last.fm data for popularity/rating
+                const lastfmData = await this.getLastfmAlbumInfo(album.artists[0].name, album.name);
+                if (lastfmData && lastfmData.album) {
+                    // Calculate a rating based on Last.fm popularity (playcount and listeners)
+                    const playcount = parseInt(lastfmData.album.playcount) || 0;
+                    const listeners = parseInt(lastfmData.album.listeners) || 0;
+                    
+                    // Simple rating algorithm - can be adjusted as needed
+                    // Scale from 0-5 stars based on listener count
+                    const maxListeners = 1000000; // Arbitrary benchmark for a very popular album
+                    const rating = Math.min(5, (listeners / maxListeners) * 5);
+                    basicData.rating = Math.max(3, rating); // Set minimum rating to 3.0 for new releases
+                    
+                    // Add Last.fm tags
+                    if (lastfmData.album.tags && lastfmData.album.tags.tag) {
+                        basicData.tags = lastfmData.album.tags.tag.slice(0, 5).map(tag => tag.name);
+                    }
+                } else {
+                    // Default rating for new albums with no Last.fm data
+                    basicData.rating = 4.0;
+                }
+                
+                return basicData;
+            } catch (error) {
+                console.error(`Error processing album ${album.name}:`, error);
+                return null;
+            }
+        });
+        
+        const results = await Promise.all(promises);
+        
+        // Filter out any failed results and return the processed albums
+        return results.filter(album => album !== null);
+    }
+    
+    // Method to get similar albums based on an album ID
+    async getSimilarAlbums(albumId, artistName, albumName) {
+        // Try to find similar albums by the same artist first
+        const artistAlbums = await this.searchSpotify(`artist:"${artistName}"`, 'album', 10);
+        const sameArtistAlbums = artistAlbums?.albums?.items || [];
+        
+        // Filter out the original album
+        const otherAlbumsByArtist = sameArtistAlbums.filter(album => album.id !== albumId);
+        
+        // Get genre information from Last.fm
+        const lastfmInfo = await this.getLastfmAlbumInfo(artistName, albumName);
+        let tags = [];
+        if (lastfmInfo && lastfmInfo.album && lastfmInfo.album.tags) {
+            tags = lastfmInfo.album.tags.tag.map(tag => tag.name);
+        }
+        
+        // Use the first 3 tags to find similar albums
+        const similarAlbums = [];
+        if (tags.length > 0) {
+            // Try to get albums with similar tags from Spotify
+            const tagQueries = tags.slice(0, 3).map(tag => `genre:"${tag}"`);
+            
+            for (const query of tagQueries) {
+                const results = await this.searchSpotify(query, 'album', 5);
+                if (results?.albums?.items) {
+                    // Add non-duplicate albums to the results
+                    results.albums.items.forEach(album => {
+                        // Skip if it's by the same artist or already in our list
+                        if (album.artists[0].name !== artistName && 
+                            !similarAlbums.some(a => a.id === album.id)) {
+                            similarAlbums.push({
+                                id: album.id,
+                                title: album.name,
+                                artist: album.artists[0].name,
+                                cover_url: album.images[0]?.url || '',
+                                release_date: album.release_date
+                            });
+                        }
+                    });
+                }
+                
+                // Stop once we have enough similar albums
+                if (similarAlbums.length >= 10) break;
+            }
+        }
+        
+        // Combine both lists, prioritizing albums by the same artist
+        const combinedResults = [
+            ...otherAlbumsByArtist.map(album => ({
+                id: album.id,
+                title: album.name,
+                artist: album.artists[0].name,
+                cover_url: album.images[0]?.url || '',
+                release_date: album.release_date,
+                same_artist: true
+            })),
+            ...similarAlbums.map(album => ({
+                ...album,
+                same_artist: false
+            }))
+        ];
+        
+        return combinedResults.slice(0, 10); // Return at most 10 recommendations
+    }
+    
+    // Method to get user reviews from Last.fm (shoutbox comments)
+    async getAlbumReviews(artistName, albumName) {
+        const lastfmInfo = await this.getLastfmAlbumInfo(artistName, albumName);
+        
+        if (!lastfmInfo || !lastfmInfo.album || !lastfmInfo.album.shoutbox) {
+            return [];
+        }
+        
+        // Process Last.fm shoutbox comments as reviews
+        return lastfmInfo.album.shoutbox.shout.map(shout => ({
+            user: shout.author,
+            date: shout.date,
+            content: shout.body,
+            // We don't have ratings in shoutbox, so use a default or random value
+            rating: (Math.random() * 2 + 3).toFixed(1) // Random rating between 3.0-5.0
+        }));
+    }
+    
+    // Method to track listening history (would connect to user accounts)
+    async addToUserHistory(userId, albumId, timestamp = new Date()) {
+        // In a real implementation, this would save to a database
+        console.log(`Adding album ${albumId} to user ${userId}'s history at ${timestamp}`);
+        
+        // For now just return a simulated success
+        return {
+            success: true,
+            timestamp: timestamp,
+            userId: userId,
+            albumId: albumId
+        };
+    }
+    
+    // Method to mark an album as a favorite for a user
+    async toggleFavorite(userId, albumId) {
+        // In a real implementation, this would toggle in a database
+        console.log(`Toggling favorite status for album ${albumId} by user ${userId}`);
+        
+        // For now just return a simulated response
+        return {
+            success: true,
+            userId: userId,
+            albumId: albumId,
+            isFavorite: true // In real implementation, this would be the new state
+        };
+    }
+    
+    // Method to get trending albums based on recent popularity
+    async getTrendingAlbums() {
+        // In a real implementation, this would use API data + user activity
+        
+        // For now, just get new releases and sort randomly to simulate trending
+        const newReleases = await this.getRecentReleases();
+        
+        // Add fake trending score
+        const trending = newReleases.map(album => ({
+            ...album,
+            trend_score: Math.random() * 100 // Random trend score for demo
+        }));
+        
+        // Sort by trend score
+        trending.sort((a, b) => b.trend_score - a.trend_score);
+        
+        return trending.slice(0, 20); // Return top 20 trending albums
+    }
+    
+    // Method to get user recommendations based on listening history
+    async getUserRecommendations(userId, limit = 10) {
+        // In a real implementation, this would use the user's listening history
+        // and preferences to generate personalized recommendations
+        
+        // For demo purposes, just return some new releases
+        const newReleases = await this.getRecentReleases();
+        return newReleases.slice(0, limit);
+    }
+}
+
+// Initialize and export for use in other modules
+const musicAPIManager = new MusicAPIManager();
+export default musicAPIManager;
