@@ -1,106 +1,17 @@
-// music-api-integration.js - Integration with multiple music APIs
+// music-api-integration.js - Integration with MusicBrainz API
 
-class MusicAPIManager {
+class MusicBrainzAPI {
     constructor() {
-        this.apis = {
-            spotify: {
-                baseUrl: 'https://api.spotify.com/v1',
-                clientId: 'YOUR_SPOTIFY_CLIENT_ID',
-                clientSecret: 'YOUR_SPOTIFY_CLIENT_SECRET',
-                token: null,
-                tokenExpiry: null
-            },
-            musicbrainz: {
-                baseUrl: 'https://musicbrainz.org/ws/2',
-                appName: 'Sonium',
-                appVersion: '1.0.0',
-                contactEmail: 'your@email.com'
-            },
-            lastfm: {
-                baseUrl: 'https://ws.audioscrobbler.com/2.0',
-                apiKey: 'YOUR_LASTFM_API_KEY'
-            }
-        };
-    }
-
-    // Spotify Authentication
-    async getSpotifyToken() {
-        // Check if token is still valid
-        if (this.apis.spotify.token && this.apis.spotify.tokenExpiry > Date.now()) {
-            return this.apis.spotify.token;
-        }
-
-        // Request new token
-        try {
-            const response = await fetch('https://accounts.spotify.com/api/token', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': `Basic ${btoa(`${this.apis.spotify.clientId}:${this.apis.spotify.clientSecret}`)}`
-                },
-                body: 'grant_type=client_credentials'
-            });
-
-            const data = await response.json();
-            
-            if (data.access_token) {
-                this.apis.spotify.token = data.access_token;
-                this.apis.spotify.tokenExpiry = Date.now() + (data.expires_in * 1000);
-                return data.access_token;
-            } else {
-                throw new Error('Failed to get token');
-            }
-        } catch (error) {
-            console.error('Spotify authentication error:', error);
-            return null;
-        }
-    }
-
-    // Spotify API calls
-    async spotifyRequest(endpoint, params = {}) {
-        try {
-            const token = await this.getSpotifyToken();
-            if (!token) throw new Error('No valid Spotify token');
-
-            const url = new URL(`${this.apis.spotify.baseUrl}${endpoint}`);
-            Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
-
-            const response = await fetch(url, {
-                headers: {
-                    'Authorization': `Bearer ${token}`
-                }
-            });
-
-            return await response.json();
-        } catch (error) {
-            console.error('Spotify API error:', error);
-            return null;
-        }
-    }
-
-    async getSpotifyNewReleases(limit = 50) {
-        return this.spotifyRequest('/browse/new-releases', {
-            limit: limit,
-            country: 'US'
-        });
-    }
-
-    async getSpotifyAlbumDetails(albumId) {
-        return this.spotifyRequest(`/albums/${albumId}`);
-    }
-
-    async searchSpotify(query, type = 'album', limit = 20) {
-        return this.spotifyRequest('/search', {
-            q: query,
-            type: type,
-            limit: limit
-        });
+        this.baseUrl = 'https://musicbrainz.org/ws/2';
+        this.appName = 'Sonium';
+        this.appVersion = '1.0.0';
+        this.contactEmail = 'sonium.info@gmail.com';
     }
 
     // MusicBrainz API calls
-    async musicbrainzRequest(endpoint, params = {}) {
+    async makeRequest(endpoint, params = {}) {
         try {
-            const url = new URL(`${this.apis.musicbrainz.baseUrl}${endpoint}`);
+            const url = new URL(`${this.baseUrl}${endpoint}`);
             
             // Add format for JSON response
             url.searchParams.append('fmt', 'json');
@@ -111,7 +22,7 @@ class MusicAPIManager {
             // MusicBrainz requires a user agent with app name, version and contact info
             const response = await fetch(url, {
                 headers: {
-                    'User-Agent': `${this.apis.musicbrainz.appName}/${this.apis.musicbrainz.appVersion} (${this.apis.musicbrainz.contactEmail})`
+                    'User-Agent': `${this.appName}/${this.appVersion} (${this.contactEmail})`
                 }
             });
 
@@ -122,227 +33,168 @@ class MusicAPIManager {
         }
     }
 
-    async searchMusicBrainz(query, type = 'release', limit = 20) {
-        return this.musicbrainzRequest(`/${type}`, {
+    async search(query, type = 'release', limit = 20) {
+        return this.makeRequest(`/${type}`, {
             query: query,
             limit: limit
         });
     }
 
-    async getMusicBrainzRelease(mbid) {
-        return this.musicbrainzRequest(`/release/${mbid}`, {
+    async getRelease(mbid) {
+        return this.makeRequest(`/release/${mbid}`, {
             inc: 'artists+labels+recordings+release-groups+url-rels'
         });
     }
-
-    // Last.fm API calls
-    async lastfmRequest(method, params = {}) {
-        try {
-            const url = new URL(this.apis.lastfm.baseUrl);
-            
-            // Add common parameters
-            url.searchParams.append('api_key', this.apis.lastfm.apiKey);
-            url.searchParams.append('method', method);
-            url.searchParams.append('format', 'json');
-            
-            // Add other parameters
-            Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
-
-            const response = await fetch(url);
-            return await response.json();
-        } catch (error) {
-            console.error('Last.fm API error:', error);
-            return null;
-        }
-    }
-
-    async getLastfmAlbumInfo(artist, album) {
-        return this.lastfmRequest('album.getinfo', {
-            artist: artist,
-            album: album
+    
+    async getArtist(mbid) {
+        return this.makeRequest(`/artist/${mbid}`, {
+            inc: 'releases+url-rels+aliases'
         });
     }
-
-    async searchLastfm(album, limit = 20) {
-        return this.lastfmRequest('album.search', {
-            album: album,
-            limit: limit
+    
+    async getReleaseGroup(mbid) {
+        return this.makeRequest(`/release-group/${mbid}`, {
+            inc: 'artists+releases+url-rels'
         });
     }
-
-    // Cross-API methods for enhanced data
-    async getEnhancedAlbumData(albumName, artistName) {
-        // First search Spotify for basic info
-        const spotifyResults = await this.searchSpotify(`album:${albumName} artist:${artistName}`);
+    
+    // Search for albums by an artist
+    async searchReleasesByArtist(artistName, limit = 20) {
+        return this.search(`artist:"${artistName}"`, 'release', limit);
+    }
+    
+    // Get recent releases based on date
+    async getRecentReleases(limit = 50) {
+        const today = new Date();
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(today.getMonth() - 6);
         
-        if (!spotifyResults || !spotifyResults.albums || !spotifyResults.albums.items.length) {
-            return null;
-        }
+        const dateString = sixMonthsAgo.toISOString().split('T')[0];
         
-        const spotifyAlbum = spotifyResults.albums.items[0];
-        const albumData = {
-            title: spotifyAlbum.name,
-            artist: spotifyAlbum.artists[0].name,
-            release_date: spotifyAlbum.release_date,
-            cover_image_url: spotifyAlbum.images[0]?.url,
-            spotify_id: spotifyAlbum.id,
-            spotify_url: spotifyAlbum.external_urls.spotify,
-            tracks: spotifyAlbum.total_tracks,
-            // These will be filled in from other sources
-            musicbrainz_id: null,
-            lastfm_tags: [],
-            additional_info: {}
+        return this.search(`date:[${dateString} TO *]`, 'release', limit);
+    }
+    
+    // Process release data into a standardized format
+    processReleaseData(mbRelease) {
+        if (!mbRelease) return null;
+        
+        // Format cover art URL based on MusicBrainz ID
+        // Using Cover Art Archive which pairs with MusicBrainz
+        const coverUrl = mbRelease.id ? 
+            `https://coverartarchive.org/release/${mbRelease.id}/front` : 
+            '';
+        
+        return {
+            id: mbRelease.id,
+            title: mbRelease.title,
+            artist: mbRelease['artist-credit']?.[0]?.artist?.name || 'Unknown Artist',
+            release_date: mbRelease.date || 'Unknown Date',
+            cover_url: coverUrl,
+            label: mbRelease.label?.[0]?.name,
+            country: mbRelease.country,
+            status: mbRelease.status,
+            tracks: mbRelease.media?.[0]?.track?.length || 0,
+            barcode: mbRelease.barcode,
         };
-        
-        // Try to get MusicBrainz data
-        const mbResults = await this.searchMusicBrainz(`release:${albumName} AND artist:${artistName}`);
-        if (mbResults && mbResults.releases && mbResults.releases.length) {
-            const mbRelease = mbResults.releases[0];
-            albumData.musicbrainz_id = mbRelease.id;
-            
-            // Get detailed release info
-            const detailedRelease = await this.getMusicBrainzRelease(mbRelease.id);
-            if (detailedRelease) {
-                albumData.additional_info.label = detailedRelease.label && detailedRelease.label.name;
-                albumData.additional_info.barcode = detailedRelease.barcode;
-                albumData.additional_info.country = detailedRelease.country;
-            }
-        }
-        
-        // Get Last.fm tags and info
-        const lastfmInfo = await this.getLastfmAlbumInfo(artistName, albumName);
-        if (lastfmInfo && lastfmInfo.album) {
-            if (lastfmInfo.album.tags && lastfmInfo.album.tags.tag) {
-                albumData.lastfm_tags = lastfmInfo.album.tags.tag.map(tag => tag.name);
-            }
-            
-            if (lastfmInfo.album.wiki) {
-                albumData.additional_info.summary = lastfmInfo.album.wiki.summary;
-                albumData.additional_info.content = lastfmInfo.album.wiki.content;
-            }
-            
-            albumData.additional_info.listeners = lastfmInfo.album.listeners;
-            albumData.additional_info.playcount = lastfmInfo.album.playcount;
-        }
-        
-        return albumData;
     }
-
-    // Method to fetch and process recent releases from all APIs
-    async getRecentReleases() {
-        // Start with Spotify as it has the most reliable new releases endpoint
-        const spotifyNewReleases = await this.getSpotifyNewReleases(50);
+    
+    // Get trending albums
+    // Since MusicBrainz doesn't have popularity data, we'll simulate this
+    async getTrendingAlbums(limit = 20) {
+        // Get recent releases and process them
+        const recentData = await this.getRecentReleases(50);
         
-        if (!spotifyNewReleases || !spotifyNewReleases.albums || !spotifyNewReleases.albums.items) {
-            console.error('Failed to get new releases from Spotify');
+        if (!recentData || !recentData.releases || !recentData.releases.length) {
             return [];
         }
         
-        // Process each album with enhanced data
-        const processedAlbums = [];
-        
-        // Use Promise.all for parallel processing
-        const promises = spotifyNewReleases.albums.items.map(async (album) => {
-            try {
-                // Get basic information from the Spotify release
-                const basicData = {
-                    id: album.id,
-                    title: album.name,
-                    artist: album.artists[0].name,
-                    cover_url: album.images[0]?.url || '',
-                    release_date: album.release_date,
-                    rating: 0 // Will be calculated from Last.fm data
-                };
+        // Process each release
+        const albums = recentData.releases
+            .filter(release => release.title && release['artist-credit']?.[0]?.artist?.name)
+            .map(release => {
+                const processed = this.processReleaseData(release);
                 
-                // Try to get Last.fm data for popularity/rating
-                const lastfmData = await this.getLastfmAlbumInfo(album.artists[0].name, album.name);
-                if (lastfmData && lastfmData.album) {
-                    // Calculate a rating based on Last.fm popularity (playcount and listeners)
-                    const playcount = parseInt(lastfmData.album.playcount) || 0;
-                    const listeners = parseInt(lastfmData.album.listeners) || 0;
-                    
-                    // Simple rating algorithm - can be adjusted as needed
-                    // Scale from 0-5 stars based on listener count
-                    const maxListeners = 1000000; // Arbitrary benchmark for a very popular album
-                    const rating = Math.min(5, (listeners / maxListeners) * 5);
-                    basicData.rating = Math.max(3, rating); // Set minimum rating to 3.0 for new releases
-                    
-                    // Add Last.fm tags
-                    if (lastfmData.album.tags && lastfmData.album.tags.tag) {
-                        basicData.tags = lastfmData.album.tags.tag.slice(0, 5).map(tag => tag.name);
-                    }
-                } else {
-                    // Default rating for new albums with no Last.fm data
-                    basicData.rating = 4.0;
-                }
+                // Add simulated rating (between 3.5 and 5.0)
+                processed.rating = (Math.random() * 1.5 + 3.5).toFixed(1);
                 
-                return basicData;
-            } catch (error) {
-                console.error(`Error processing album ${album.name}:`, error);
-                return null;
-            }
-        });
+                return processed;
+            });
         
-        const results = await Promise.all(promises);
-        
-        // Filter out any failed results and return the processed albums
-        return results.filter(album => album !== null);
+        // Sort randomly to simulate "trending"
+        return albums
+            .sort(() => Math.random() - 0.5)
+            .slice(0, limit);
     }
     
-    // Method to get similar albums based on an album ID
-    async getSimilarAlbums(albumId, artistName, albumName) {
-        // Try to find similar albums by the same artist first
-        const artistAlbums = await this.searchSpotify(`artist:"${artistName}"`, 'album', 10);
-        const sameArtistAlbums = artistAlbums?.albums?.items || [];
+    // Get new releases
+    async getNewReleases(limit = 20) {
+        const recentData = await this.getRecentReleases(limit * 2);
         
-        // Filter out the original album
-        const otherAlbumsByArtist = sameArtistAlbums.filter(album => album.id !== albumId);
-        
-        // Get genre information from Last.fm
-        const lastfmInfo = await this.getLastfmAlbumInfo(artistName, albumName);
-        let tags = [];
-        if (lastfmInfo && lastfmInfo.album && lastfmInfo.album.tags) {
-            tags = lastfmInfo.album.tags.tag.map(tag => tag.name);
+        if (!recentData || !recentData.releases || !recentData.releases.length) {
+            return [];
         }
         
-        // Use the first 3 tags to find similar albums
-        const similarAlbums = [];
-        if (tags.length > 0) {
-            // Try to get albums with similar tags from Spotify
-            const tagQueries = tags.slice(0, 3).map(tag => `genre:"${tag}"`);
-            
-            for (const query of tagQueries) {
-                const results = await this.searchSpotify(query, 'album', 5);
-                if (results?.albums?.items) {
-                    // Add non-duplicate albums to the results
-                    results.albums.items.forEach(album => {
-                        // Skip if it's by the same artist or already in our list
-                        if (album.artists[0].name !== artistName && 
-                            !similarAlbums.some(a => a.id === album.id)) {
-                            similarAlbums.push({
-                                id: album.id,
-                                title: album.name,
-                                artist: album.artists[0].name,
-                                cover_url: album.images[0]?.url || '',
-                                release_date: album.release_date
-                            });
-                        }
-                    });
-                }
+        // Process and sort by release date (newest first)
+        const albums = recentData.releases
+            .filter(release => release.title && release['artist-credit']?.[0]?.artist?.name && release.date)
+            .map(release => {
+                const processed = this.processReleaseData(release);
                 
-                // Stop once we have enough similar albums
-                if (similarAlbums.length >= 10) break;
+                // Add simulated rating (between 3.5 and 5.0)
+                processed.rating = (Math.random() * 1.5 + 3.5).toFixed(1);
+                
+                return processed;
+            })
+            .sort((a, b) => {
+                // Sort by date (newest first)
+                const dateA = new Date(a.release_date);
+                const dateB = new Date(b.release_date);
+                return dateB - dateA;
+            });
+        
+        return albums.slice(0, limit);
+    }
+    
+    // Get similar albums to a specified release
+    async getSimilarAlbums(mbid, artistName, albumName, limit = 10) {
+        // First approach: get more albums by the same artist
+        const artistReleases = await this.searchReleasesByArtist(artistName, 20);
+        
+        if (!artistReleases || !artistReleases.releases || !artistReleases.releases.length) {
+            return [];
+        }
+        
+        // Filter out the original album
+        const otherAlbumsByArtist = artistReleases.releases
+            .filter(release => release.id !== mbid)
+            .map(release => this.processReleaseData(release));
+        
+        // Second approach: try to find albums with similar titles or by similar artists
+        // This is a basic approach since MusicBrainz doesn't have recommendation features
+        const words = albumName.split(' ').filter(word => word.length > 3);
+        const similarAlbums = [];
+        
+        if (words.length > 0) {
+            // Use one or two keywords from the album title
+            const searchTerm = words.slice(0, 2).join(' ');
+            const results = await this.search(searchTerm, 'release', 15);
+            
+            if (results && results.releases) {
+                // Add non-duplicate albums to the results
+                results.releases.forEach(release => {
+                    // Skip if it's by the same artist or already in our list
+                    if (release['artist-credit']?.[0]?.artist?.name !== artistName && 
+                        !similarAlbums.some(a => a.id === release.id)) {
+                        similarAlbums.push(this.processReleaseData(release));
+                    }
+                });
             }
         }
         
         // Combine both lists, prioritizing albums by the same artist
         const combinedResults = [
             ...otherAlbumsByArtist.map(album => ({
-                id: album.id,
-                title: album.name,
-                artist: album.artists[0].name,
-                cover_url: album.images[0]?.url || '',
-                release_date: album.release_date,
+                ...album,
                 same_artist: true
             })),
             ...similarAlbums.map(album => ({
@@ -351,33 +203,74 @@ class MusicAPIManager {
             }))
         ];
         
-        return combinedResults.slice(0, 10); // Return at most 10 recommendations
+        // Add simulated ratings
+        return combinedResults
+            .map(album => ({
+                ...album,
+                rating: album.rating || (Math.random() * 1.5 + 3.5).toFixed(1)
+            }))
+            .slice(0, limit);
     }
     
-    // Method to get user reviews from Last.fm (shoutbox comments)
-    async getAlbumReviews(artistName, albumName) {
-        const lastfmInfo = await this.getLastfmAlbumInfo(artistName, albumName);
+    // Get enhanced album details
+    async getEnhancedAlbumData(albumName, artistName) {
+        // Search MusicBrainz for the album
+        const searchResults = await this.search(`release:"${albumName}" AND artist:"${artistName}"`, 'release', 1);
         
-        if (!lastfmInfo || !lastfmInfo.album || !lastfmInfo.album.shoutbox) {
-            return [];
+        if (!searchResults || !searchResults.releases || !searchResults.releases.length) {
+            return null;
         }
         
-        // Process Last.fm shoutbox comments as reviews
-        return lastfmInfo.album.shoutbox.shout.map(shout => ({
-            user: shout.author,
-            date: shout.date,
-            content: shout.body,
-            // We don't have ratings in shoutbox, so use a default or random value
-            rating: (Math.random() * 2 + 3).toFixed(1) // Random rating between 3.0-5.0
-        }));
+        const mbid = searchResults.releases[0].id;
+        
+        // Get detailed release info
+        const detailedRelease = await this.getRelease(mbid);
+        if (!detailedRelease) {
+            return null;
+        }
+        
+        // Process into standardized format
+        const albumData = this.processReleaseData(detailedRelease);
+        
+        // Get additional information
+        albumData.additional_info = {
+            packaging: detailedRelease.packaging,
+            quality: detailedRelease.quality,
+            disambiguation: detailedRelease.disambiguation,
+            status: detailedRelease.status,
+        };
+        
+        // Add track listing if available
+        if (detailedRelease.media && detailedRelease.media.length > 0 && 
+            detailedRelease.media[0].tracks && detailedRelease.media[0].tracks.length > 0) {
+            
+            albumData.tracks = detailedRelease.media[0].tracks.map(track => ({
+                position: track.position,
+                title: track.title,
+                length: track.length,
+                artist: track['artist-credit']?.[0]?.artist?.name || albumData.artist
+            }));
+        }
+        
+        // Add simulated rating
+        albumData.rating = (Math.random() * 1.5 + 3.5).toFixed(1);
+        
+        return albumData;
     }
     
-    // Method to track listening history (would connect to user accounts)
+    // Get user recommendations (simulated since MusicBrainz doesn't have user accounts)
+    async getUserRecommendations(userId, limit = 10) {
+        // In a real app, this would use the user's listening history
+        // For now, just return some trending albums as recommendations
+        return this.getTrendingAlbums(limit);
+    }
+    
+    // Simulated method to track a user's listening history
     async addToUserHistory(userId, albumId, timestamp = new Date()) {
         // In a real implementation, this would save to a database
         console.log(`Adding album ${albumId} to user ${userId}'s history at ${timestamp}`);
         
-        // For now just return a simulated success
+        // Return simulated success response
         return {
             success: true,
             timestamp: timestamp,
@@ -386,50 +279,21 @@ class MusicAPIManager {
         };
     }
     
-    // Method to mark an album as a favorite for a user
+    // Simulated method to toggle an album as a favorite for a user
     async toggleFavorite(userId, albumId) {
         // In a real implementation, this would toggle in a database
         console.log(`Toggling favorite status for album ${albumId} by user ${userId}`);
         
-        // For now just return a simulated response
+        // Return simulated success response
         return {
             success: true,
             userId: userId,
             albumId: albumId,
-            isFavorite: true // In real implementation, this would be the new state
+            isFavorite: true // In a real implementation, this would be the new state
         };
-    }
-    
-    // Method to get trending albums based on recent popularity
-    async getTrendingAlbums() {
-        // In a real implementation, this would use API data + user activity
-        
-        // For now, just get new releases and sort randomly to simulate trending
-        const newReleases = await this.getRecentReleases();
-        
-        // Add fake trending score
-        const trending = newReleases.map(album => ({
-            ...album,
-            trend_score: Math.random() * 100 // Random trend score for demo
-        }));
-        
-        // Sort by trend score
-        trending.sort((a, b) => b.trend_score - a.trend_score);
-        
-        return trending.slice(0, 20); // Return top 20 trending albums
-    }
-    
-    // Method to get user recommendations based on listening history
-    async getUserRecommendations(userId, limit = 10) {
-        // In a real implementation, this would use the user's listening history
-        // and preferences to generate personalized recommendations
-        
-        // For demo purposes, just return some new releases
-        const newReleases = await this.getRecentReleases();
-        return newReleases.slice(0, limit);
     }
 }
 
 // Initialize and export for use in other modules
-const musicAPIManager = new MusicAPIManager();
-export default musicAPIManager;
+const musicBrainzAPI = new MusicBrainzAPI();
+export default musicBrainzAPI;

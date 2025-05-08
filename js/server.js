@@ -1,4 +1,4 @@
-// server.js - Express server for Sonium
+// server.js - Express server for Sonium, using MusicBrainz API
 
 const express = require('express');
 const cors = require('cors');
@@ -23,6 +23,11 @@ const pool = new Pool({
     port: process.env.DB_PORT || 5432,
 });
 
+// MusicBrainz API configuration
+const MUSICBRAINZ_API_BASE = 'https://musicbrainz.org/ws/2';
+const COVER_ART_ARCHIVE_API = 'https://coverartarchive.org';
+const USER_AGENT = 'Sonium/1.0.0 (your@email.com)'; // Required by MusicBrainz
+
 // Database initialization
 async function initDatabase() {
     try {
@@ -35,7 +40,7 @@ async function initDatabase() {
                 name VARCHAR(255) NOT NULL,
                 bio TEXT,
                 image_url TEXT,
-                spotify_id VARCHAR(255),
+                mbid VARCHAR(36) UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -52,7 +57,7 @@ async function initDatabase() {
                 artist_id INTEGER REFERENCES artists(id),
                 release_date DATE,
                 cover_image_url TEXT,
-                spotify_id VARCHAR(255),
+                mbid VARCHAR(36) UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -90,65 +95,79 @@ async function initDatabase() {
     }
 }
 
-// Spotify API integration
-const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
-const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
-let spotifyToken = null;
-let tokenExpiration = null;
-
-async function getSpotifyToken() {
-    // Check if token is still valid
-    if (spotifyToken && tokenExpiration && Date.now() < tokenExpiration) {
-        return spotifyToken;
-    }
+// MusicBrainz API helper functions
+async function musicBrainzRequest(endpoint, params = {}) {
+    const url = new URL(`${MUSICBRAINZ_API_BASE}${endpoint}`);
+    
+    // Add format for JSON response
+    url.searchParams.append('fmt', 'json');
+    
+    // Add other parameters
+    Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
     
     try {
-        // Get new token
-        const response = await axios({
-            method: 'post',
-            url: 'https://accounts.spotify.com/api/token',
-            params: {
-                grant_type: 'client_credentials'
-            },
+        // MusicBrainz requires a user agent
+        const response = await axios.get(url.toString(), {
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Authorization': 'Basic ' + Buffer.from(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`).toString('base64')
+                'User-Agent': USER_AGENT
             }
         });
         
-        spotifyToken = response.data.access_token;
-        // Set expiration time (usually 3600 seconds)
-        tokenExpiration = Date.now() + (response.data.expires_in * 1000);
-        
-        return spotifyToken;
+        return response.data;
     } catch (error) {
-        console.error('Error getting Spotify token:', error.message);
+        console.error('MusicBrainz API error:', error.message);
         return null;
     }
 }
 
-// Function to fetch new releases from Spotify
-async function fetchNewReleases() {
+async function getCoverArtForRelease(mbid) {
     try {
-        const token = await getSpotifyToken();
-        if (!token) {
-            console.error('Failed to get Spotify token');
-            return [];
-        }
-        
-        const response = await axios.get('https://api.spotify.com/v1/browse/new-releases', {
+        const response = await axios.get(`${COVER_ART_ARCHIVE_API}/release/${mbid}`, {
             headers: {
-                'Authorization': `Bearer ${token}`
-            },
-            params: {
-                limit: 50,
-                country: 'US'
+                'User-Agent': USER_AGENT
             }
         });
         
-        return response.data.albums.items;
+        // Return front image URL if available
+        if (response.data && response.data.images && response.data.images.length > 0) {
+            const frontImage = response.data.images.find(img => img.front) || response.data.images[0];
+            return frontImage.image;
+        }
+        
+        return null;
     } catch (error) {
-        console.error('Error fetching new releases:', error.message);
+        // Cover art might not be available for all releases
+        console.log(`No cover art for release ${mbid}`);
+        return null;
+    }
+}
+
+// Function to fetch recent releases from MusicBrainz
+async function fetchRecentReleases(limit = 50) {
+    try {
+        // Get releases from the past 3 months
+        const threeMonthsAgo = new Date();
+        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+        const dateStr = threeMonthsAgo.toISOString().split('T')[0];
+        
+        // MusicBrainz query for recent releases
+        const query = `date:[${dateStr} TO *] AND status:official AND type:album`;
+        
+        const data = await musicBrainzRequest('/release', {
+            query: query,
+            limit: limit,
+            offset: 0
+        });
+        
+        if (!data || !data.releases) {
+            console.error('Failed to get releases from MusicBrainz');
+            return [];
+        }
+        
+        // Process the releases
+        return data.releases;
+    } catch (error) {
+        console.error('Error fetching recent releases:', error.message);
         return [];
     }
 }
@@ -157,7 +176,7 @@ async function fetchNewReleases() {
 async function updateAlbumLibrary() {
     try {
         console.log('Starting album library update...');
-        const newReleases = await fetchNewReleases();
+        const newReleases = await fetchRecentReleases();
         
         if (!newReleases.length) {
             console.log('No new releases found');
@@ -167,45 +186,104 @@ async function updateAlbumLibrary() {
         console.log(`Found ${newReleases.length} new releases`);
         const client = await pool.connect();
         
-        for (const album of newReleases) {
-            // Check if artist exists
-            let artistId;
-            const artistResult = await client.query(
-                'SELECT id FROM artists WHERE spotify_id = $1',
-                [album.artists[0].id]
-            );
-            
-            if (artistResult.rows.length) {
-                artistId = artistResult.rows[0].id;
-            } else {
-                // Insert new artist
-                const newArtist = await client.query(
-                    'INSERT INTO artists (name, spotify_id, image_url) VALUES ($1, $2, $3) RETURNING id',
-                    [album.artists[0].name, album.artists[0].id, ''] // Image URL would be fetched separately
+        for (const release of newReleases) {
+            try {
+                // Get artist information
+                let artistId;
+                if (release['artist-credit'] && release['artist-credit'].length > 0) {
+                    const artist = release['artist-credit'][0].artist;
+                    
+                    // Check if artist exists
+                    const artistResult = await client.query(
+                        'SELECT id FROM artists WHERE mbid = $1',
+                        [artist.id]
+                    );
+                    
+                    if (artistResult.rows.length) {
+                        artistId = artistResult.rows[0].id;
+                    } else {
+                        // Insert new artist
+                        const newArtist = await client.query(
+                            'INSERT INTO artists (name, mbid) VALUES ($1, $2) RETURNING id',
+                            [artist.name, artist.id]
+                        );
+                        artistId = newArtist.rows[0].id;
+                    }
+                } else {
+                    console.log(`Skipping release ${release.id} - no artist information`);
+                    continue;
+                }
+                
+                // Check if album exists
+                const albumResult = await client.query(
+                    'SELECT id FROM albums WHERE mbid = $1',
+                    [release.id]
                 );
-                artistId = newArtist.rows[0].id;
-            }
-            
-            // Check if album exists
-            const albumResult = await client.query(
-                'SELECT id FROM albums WHERE spotify_id = $1',
-                [album.id]
-            );
-            
-            if (albumResult.rows.length === 0) {
-                // Insert new album
-                await client.query(
-                    `INSERT INTO albums 
-                     (title, artist_id, release_date, cover_image_url, spotify_id) 
-                     VALUES ($1, $2, $3, $4, $5)`,
-                    [
-                        album.name,
-                        artistId,
-                        album.release_date,
-                        album.images[0]?.url || '',
-                        album.id
-                    ]
-                );
+                
+                if (albumResult.rows.length === 0) {
+                    // Get cover image URL
+                    const coverImageUrl = await getCoverArtForRelease(release.id) || '';
+                    
+                    // Parse release date - MusicBrainz gives dates in various formats
+                    let releaseDate = null;
+                    if (release.date) {
+                        // Handle various date formats (YYYY, YYYY-MM, YYYY-MM-DD)
+                        const parts = release.date.split('-');
+                        if (parts.length === 1) {
+                            releaseDate = `${parts[0]}-01-01`; // Default to Jan 1
+                        } else if (parts.length === 2) {
+                            releaseDate = `${parts[0]}-${parts[1]}-01`; // Default to 1st of month
+                        } else {
+                            releaseDate = release.date;
+                        }
+                    }
+                    
+                    // Insert new album
+                    await client.query(
+                        `INSERT INTO albums 
+                         (title, artist_id, release_date, cover_image_url, mbid) 
+                         VALUES ($1, $2, $3, $4, $5)`,
+                        [
+                            release.title,
+                            artistId,
+                            releaseDate,
+                            coverImageUrl,
+                            release.id
+                        ]
+                    );
+                    
+                    // Add genres if available
+                    if (release.tags && release.tags.length > 0) {
+                        for (const tag of release.tags) {
+                            // Get or create genre
+                            let genreId;
+                            const genreResult = await client.query(
+                                'SELECT id FROM genres WHERE name = $1',
+                                [tag.name.toLowerCase()]
+                            );
+                            
+                            if (genreResult.rows.length) {
+                                genreId = genreResult.rows[0].id;
+                            } else {
+                                const newGenre = await client.query(
+                                    'INSERT INTO genres (name) VALUES ($1) RETURNING id',
+                                    [tag.name.toLowerCase()]
+                                );
+                                genreId = newGenre.rows[0].id;
+                            }
+                            
+                            // Link album to genre
+                            await client.query(
+                                'INSERT INTO album_genres (album_id, genre_id) VALUES ((SELECT id FROM albums WHERE mbid = $1), $2)',
+                                [release.id, genreId]
+                            );
+                        }
+                    }
+                }
+            } catch (releaseError) {
+                console.error(`Error processing release ${release.id}:`, releaseError);
+                // Continue with the next release
+                continue;
             }
         }
         
@@ -222,10 +300,10 @@ async function updateAlbumLibrary() {
 app.get('/api/albums/recent', async (req, res) => {
     try {
         const { rows } = await pool.query(`
-            SELECT a.id, a.title, a.release_date, a.cover_image_url, ar.name as artist
+            SELECT a.id, a.title, a.release_date, a.cover_image_url, ar.name as artist, a.mbid
             FROM albums a
             JOIN artists ar ON a.artist_id = ar.id
-            ORDER BY a.release_date DESC
+            ORDER BY a.release_date DESC NULLS LAST
             LIMIT 20
         `);
         
@@ -246,13 +324,13 @@ app.get('/api/albums/search', async (req, res) => {
     
     try {
         const { rows } = await pool.query(`
-            SELECT a.id, a.title, a.release_date, a.cover_image_url, ar.name as artist
+            SELECT a.id, a.title, a.release_date, a.cover_image_url, ar.name as artist, a.mbid
             FROM albums a
             JOIN artists ar ON a.artist_id = ar.id
             WHERE 
                 a.title ILIKE $1 OR
                 ar.name ILIKE $1
-            ORDER BY a.release_date DESC
+            ORDER BY a.release_date DESC NULLS LAST
             LIMIT 50
         `, [`%${query}%`]);
         
@@ -270,7 +348,7 @@ app.get('/api/albums/:id', async (req, res) => {
     try {
         // Get album details
         const albumResult = await pool.query(`
-            SELECT a.id, a.title, a.release_date, a.cover_image_url, ar.name as artist
+            SELECT a.id, a.title, a.release_date, a.cover_image_url, ar.name as artist, a.mbid, ar.mbid as artist_mbid
             FROM albums a
             JOIN artists ar ON a.artist_id = ar.id
             WHERE a.id = $1
@@ -299,12 +377,106 @@ app.get('/api/albums/:id', async (req, res) => {
             ...albumResult.rows[0],
             genres: genresResult.rows.map(g => g.name),
             average_rating: ratingResult.rows[0].average_rating || 0,
-            review_count: ratingResult.rows[0].review_count || 0
+            review_count: parseInt(ratingResult.rows[0].review_count) || 0
         };
+        
+        // Try to get additional details from MusicBrainz API
+        if (album.mbid) {
+            try {
+                const mbRelease = await musicBrainzRequest(`/release/${album.mbid}`, {
+                    inc: 'recordings+artists+labels+url-rels'
+                });
+                
+                if (mbRelease) {
+                    // Add track listing
+                    if (mbRelease.media && mbRelease.media.length > 0) {
+                        album.tracks = mbRelease.media.flatMap(medium => 
+                            medium.tracks ? medium.tracks.map(track => ({
+                                position: track.position,
+                                title: track.title,
+                                length: track.length, // in milliseconds
+                                disc: medium.position
+                            })) : []
+                        );
+                    }
+                    
+                    // Add label info
+                    if (mbRelease['label-info'] && mbRelease['label-info'].length > 0) {
+                        const labelInfo = mbRelease['label-info'][0];
+                        if (labelInfo.label) {
+                            album.label = labelInfo.label.name;
+                        }
+                        album.catalog_number = labelInfo['catalog-number'] || '';
+                    }
+                    
+                    // Add country and barcode
+                    album.country = mbRelease.country || '';
+                    album.barcode = mbRelease.barcode || '';
+                }
+            } catch (mbError) {
+                console.error('Error fetching additional MusicBrainz data:', mbError);
+                // Continue with the basic album info
+            }
+        }
         
         res.json(album);
     } catch (error) {
         console.error('Error fetching album details:', error);
+        res.status(500).json({ error: 'Server error' });
+    }
+});
+
+// Search MusicBrainz directly
+app.get('/api/musicbrainz/search', async (req, res) => {
+    const { query, type = 'release' } = req.query;
+    
+    if (!query) {
+        return res.status(400).json({ error: 'Search query is required' });
+    }
+    
+    try {
+        const data = await musicBrainzRequest(`/${type}`, {
+            query: query,
+            limit: 20
+        });
+        
+        if (!data) {
+            return res.status(500).json({ error: 'MusicBrainz API error' });
+        }
+        
+        // Process the results based on the type
+        let results = [];
+        
+        if (type === 'release') {
+            results = await Promise.all(data.releases.map(async (release) => {
+                // Try to get cover art
+                let coverUrl = '';
+                try {
+                    coverUrl = await getCoverArtForRelease(release.id) || '';
+                } catch (err) {
+                    // Ignore cover art errors
+                }
+                
+                return {
+                    id: release.id,
+                    title: release.title,
+                    artist: release['artist-credit']?.[0]?.artist?.name || 'Unknown Artist',
+                    release_date: release.date || '',
+                    cover_image_url: coverUrl
+                };
+            }));
+        } else if (type === 'artist') {
+            results = data.artists.map(artist => ({
+                id: artist.id,
+                name: artist.name,
+                country: artist.country || '',
+                type: artist.type || ''
+            }));
+        }
+        
+        res.json(results);
+    } catch (error) {
+        console.error('Error searching MusicBrainz:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });

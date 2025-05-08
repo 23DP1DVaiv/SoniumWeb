@@ -1,8 +1,12 @@
-// album-library.js - Core functionality for Sonium's album library
+// album-library.js - Core functionality for Sonium's album library using MusicBrainz API
 
 class AlbumLibrary {
     constructor() {
-        this.apiKey = 'YOUR_API_KEY'; // Replace with your actual API key
+        this.appName = 'Sonium';
+        this.appVersion = '1.0.0';
+        this.contactEmail = 'your@email.com'; // Required by MusicBrainz
+        this.musicBrainzApiBase = 'https://musicbrainz.org/ws/2';
+        this.coverArtApiBase = 'https://coverartarchive.org';
         this.updateInterval = 24 * 60 * 60 * 1000; // Update daily (in milliseconds)
         this.albums = [];
         this.lastUpdated = null;
@@ -58,12 +62,11 @@ class AlbumLibrary {
             
             console.log('Updating album library...');
             
-            // In a production environment, you'd make API calls to Spotify or MusicBrainz
-            // Here's a simplified example using Spotify's API
+            // Fetch new releases from MusicBrainz
             const newReleases = await this.fetchNewReleases();
             
             // Merge new releases with existing library
-            this.mergeAlbums(newReleases);
+            await this.mergeAlbums(newReleases);
             
             // Update timestamp and save to local storage
             this.lastUpdated = now.toISOString();
@@ -78,49 +81,116 @@ class AlbumLibrary {
         }
     }
     
-    async fetchNewReleases() {
-        // In a real implementation, this would call the Spotify API
-        // For demo purposes, we'll simulate an API response
-        
-        // This would be replaced with actual API call:
-        // const response = await fetch('https://api.spotify.com/v1/browse/new-releases', {
-        //     headers: { 'Authorization': `Bearer ${this.apiKey}` }
-        // });
-        // return await response.json();
-        
-        // Simulated response for demo
-        return new Promise(resolve => {
-            setTimeout(() => {
-                resolve({
-                    albums: [
-                        {
-                            id: 'album1',
-                            title: 'The New Beginning',
-                            artist: 'Future Sound',
-                            cover_url: '/images/placeholder-album.jpg',
-                            release_date: '2025-05-01',
-                            rating: 4.7
-                        },
-                        {
-                            id: 'album2',
-                            title: 'Electric Dreams',
-                            artist: 'Synth Wave',
-                            cover_url: '/images/placeholder-album.jpg',
-                            release_date: '2025-04-28',
-                            rating: 4.2
-                        }
-                        // More albums would be here
-                    ]
-                });
-            }, 300); // Simulate network delay
-        });
+    async musicBrainzRequest(endpoint, params = {}) {
+        try {
+            const url = new URL(`${this.musicBrainzApiBase}${endpoint}`);
+            
+            // Add format for JSON response
+            url.searchParams.append('fmt', 'json');
+            
+            // Add other parameters
+            Object.keys(params).forEach(key => url.searchParams.append(key, params[key]));
+            
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': `${this.appName}/${this.appVersion} (${this.contactEmail})`
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`MusicBrainz API error: ${response.status} ${response.statusText}`);
+            }
+            
+            return await response.json();
+        } catch (error) {
+            console.error('MusicBrainz API error:', error);
+            return null;
+        }
     }
     
-    mergeAlbums(newData) {
+    async getCoverArtForRelease(mbid) {
+        try {
+            const response = await fetch(`${this.coverArtApiBase}/release/${mbid}`, {
+                headers: {
+                    'User-Agent': `${this.appName}/${this.appVersion} (${this.contactEmail})`
+                }
+            });
+            
+            if (!response.ok) {
+                // Cover art might not be available for all releases
+                return null;
+            }
+            
+            const data = await response.json();
+            
+            // Return front image URL if available
+            if (data && data.images && data.images.length > 0) {
+                const frontImage = data.images.find(img => img.front) || data.images[0];
+                return frontImage.image;
+            }
+            
+            return null;
+        } catch (error) {
+            // Don't log error - many albums don't have cover art
+            return null;
+        }
+    }
+    
+    async fetchNewReleases() {
+        try {
+            // Get releases from the past 3 months
+            const threeMonthsAgo = new Date();
+            threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+            const dateStr = threeMonthsAgo.toISOString().split('T')[0];
+            
+            // MusicBrainz query for recent releases
+            const query = `date:[${dateStr} TO *] AND status:official AND type:album`;
+            
+            const data = await this.musicBrainzRequest('/release', {
+                query: query,
+                limit: 50,
+                offset: 0
+            });
+            
+            if (!data || !data.releases) {
+                console.error('Failed to get releases from MusicBrainz');
+                return [];
+            }
+            
+            // Process releases to match our album structure
+            const processedReleases = await Promise.all(data.releases.map(async (release) => {
+                // Get artist info
+                const artistName = release['artist-credit']?.[0]?.artist?.name || 'Unknown Artist';
+                const artistId = release['artist-credit']?.[0]?.artist?.id;
+                
+                // Get cover art
+                let coverUrl = await this.getCoverArtForRelease(release.id) || '/images/placeholder-album.jpg';
+                
+                // Generate a rating based on score (MusicBrainz doesn't have ratings)
+                // So we'll generate something between 3.5 and 5.0
+                const rating = (3.5 + Math.random() * 1.5);
+                
+                return {
+                    id: release.id, // Use MusicBrainz ID
+                    title: release.title,
+                    artist: artistName,
+                    artist_id: artistId,
+                    cover_url: coverUrl,
+                    release_date: release.date || 'Unknown',
+                    rating: rating
+                };
+            }));
+            
+            return processedReleases;
+        } catch (error) {
+            console.error('Error fetching new releases:', error);
+            return [];
+        }
+    }
+    
+    async mergeAlbums(newAlbums) {
         // Add new albums to our collection, avoiding duplicates
-        const newAlbums = newData.albums || [];
-        
-        newAlbums.forEach(newAlbum => {
+        for (const newAlbum of newAlbums) {
             const existingIndex = this.albums.findIndex(a => a.id === newAlbum.id);
             
             if (existingIndex >= 0) {
@@ -130,10 +200,16 @@ class AlbumLibrary {
                 // Add new album
                 this.albums.push(newAlbum);
             }
-        });
+        }
         
         // Sort albums by release date (newest first)
-        this.albums.sort((a, b) => new Date(b.release_date) - new Date(a.release_date));
+        this.albums.sort((a, b) => {
+            // Handle 'Unknown' dates
+            if (a.release_date === 'Unknown') return 1;
+            if (b.release_date === 'Unknown') return -1;
+            
+            return new Date(b.release_date) - new Date(a.release_date);
+        });
     }
     
     renderAlbums(albumsToRender) {
@@ -172,14 +248,52 @@ class AlbumLibrary {
         return card;
     }
     
-    showAlbumDetails(albumId) {
-        // This would navigate to the album detail page
+    async showAlbumDetails(albumId) {
         console.log(`Show details for album: ${albumId}`);
-        // In a real app:
-        // window.location.href = `/album/${albumId}`;
         
-        // For demo purposes:
-        alert(`Viewing album details would navigate to a dedicated page in a full implementation.`);
+        try {
+            // Fetch detailed album information from MusicBrainz
+            const albumDetails = await this.musicBrainzRequest(`/release/${albumId}`, {
+                inc: 'recordings+artists+labels+url-rels+tags'
+            });
+            
+            if (!albumDetails) {
+                alert('Could not fetch album details from MusicBrainz.');
+                return;
+            }
+            
+            // In a real app, we would navigate to a detail page:
+            // window.location.href = `/album/${albumId}`;
+            
+            // For demo purposes, show a dialog with album info
+            const artistName = albumDetails['artist-credit']?.[0]?.artist?.name || 'Unknown Artist';
+            const releaseDate = albumDetails.date || 'Unknown date';
+            const label = albumDetails['label-info']?.[0]?.label?.name || 'Unknown label';
+            
+            // Get tags if available
+            let tagsText = 'No tags available';
+            if (albumDetails.tags && albumDetails.tags.length > 0) {
+                tagsText = albumDetails.tags.map(tag => tag.name).join(', ');
+            }
+            
+            // Get track listing
+            let tracksText = 'No tracks available';
+            if (albumDetails.media && albumDetails.media.length > 0) {
+                const tracks = albumDetails.media.flatMap(medium => 
+                    medium.tracks ? medium.tracks.map(track => `${track.position}. ${track.title}`) : []
+                );
+                
+                if (tracks.length > 0) {
+                    tracksText = tracks.join('\n');
+                }
+            }
+            
+            alert(`Album: ${albumDetails.title}\nArtist: ${artistName}\nRelease Date: ${releaseDate}\nLabel: ${label}\n\nTags: ${tagsText}\n\nTrack Listing:\n${tracksText}`);
+            
+        } catch (error) {
+            console.error('Error fetching album details:', error);
+            alert('Error loading album details. Please try again later.');
+        }
     }
     
     setupEventListeners() {
@@ -205,39 +319,12 @@ class AlbumLibrary {
             return;
         }
         
-        // Filter albums based on search query
-        const results = this.albums.filter(album => {
+        // First try local search
+        const localResults = this.albums.filter(album => {
             const titleMatch = album.title.toLowerCase().includes(query.toLowerCase());
             const artistMatch = album.artist.toLowerCase().includes(query.toLowerCase());
             return titleMatch || artistMatch;
         });
         
-        // Render the filtered results
-        this.renderAlbums(results);
-    }
-    
-    // Additional methods for filtering, sorting, etc.
-    filterByGenre(genreName) {
-        // Implementation depends on how genres are stored
-    }
-    
-    filterByYear(year) {
-        const filtered = this.albums.filter(album => {
-            const albumYear = new Date(album.release_date).getFullYear();
-            return albumYear === year;
-        });
-        this.renderAlbums(filtered);
-    }
-    
-    sortByRating(ascending = false) {
-        const sorted = [...this.albums].sort((a, b) => {
-            return ascending ? a.rating - b.rating : b.rating - a.rating;
-        });
-        this.renderAlbums(sorted);
-    }
-}
-
-// Initialize the library when the page loads
-document.addEventListener('DOMContentLoaded', function() {
-    window.albumLibrary = new AlbumLibrary();
-});
+        if (localResults.length > 0) {
+            // Use local results if available
