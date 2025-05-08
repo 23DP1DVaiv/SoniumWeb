@@ -1,0 +1,10 @@
+/* Color variables and theme */
+:root {
+    --primary: #7952b3;
+    --secondary: #5a3d99;
+    --accent: #f9c22e;
+    --light: #f8f9fa;
+    --dark: #212529;
+    --gray: #6c757d;
+    --success: #28a745;
+}

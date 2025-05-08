@@ -1,7 +1,7 @@
 // Main app.js - Entry point
-import { AlbumService } from './services/albumService.js';
-import { RatingService } from './services/ratingService.js';
-import { UserService } from './services/userService.js';
+import { AlbumService } from './styles/albumService.js';
+import { RatingService } from './styles/ratingService.js';
+import { UserService } from './styles/userService.js';
 import { UIController } from './uiController.js/uiController.js';
 import { Router } from './router.js';
 

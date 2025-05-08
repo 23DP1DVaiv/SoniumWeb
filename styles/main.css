@@ -1,0 +1,52 @@
+/* Import font families and other stylesheets */
+@import url('variables.css');
+@import url('layout.css');
+@import url('components.css');
+@import url('responsive.css');
+
+/* Base styles */
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    background-color: #f5f5f7;
+    color: var(--dark);
+    line-height: 1.6;
+}
+
+/* Footer styles */
+footer {
+    background-color: white;
+    padding: 2rem 0;
+    margin-top: 4rem;
+    border-top: 1px solid #eee;
+}
+
+.footer-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.footer-links {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.footer-links a {
+    color: var(--gray);
+    text-decoration: none;
+}
+
+.footer-links a:hover {
+    color: var(--primary);
+}
+
+.copyright {
+    color: var(--gray);
+    font-size: 0.9rem;
+}
