@@ -44,144 +44,6 @@ document.addEventListener('DOMContentLoaded', function() {
         `;
         document.body.appendChild(searchOverlay);
         
-        // Add styles for search overlay and loading spinner
-        const style = document.createElement('style');
-        style.textContent = `
-            .search-overlay {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(0,0,0,0.8);
-                z-index: 1000;
-                display: none;
-                justify-content: center;
-                align-items: flex-start;
-                padding-top: 80px;
-                overflow-y: auto;
-            }
-            .search-results {
-                background: white;
-                width: 80%;
-                max-width: 800px;
-                border-radius: 8px;
-                box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-                max-height: 80vh;
-                overflow-y: auto;
-            }
-            .search-results-header {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 15px 20px;
-                border-bottom: 1px solid #eee;
-            }
-            .search-results-header h3 {
-                margin: 0;
-            }
-            .close-search {
-                background: none;
-                border: none;
-                font-size: 24px;
-                cursor: pointer;
-                color: #333;
-            }
-            .search-results-content {
-                padding: 20px;
-            }
-            .search-results-loading {
-                text-align: center;
-                padding: 30px;
-            }
-            .loading-spinner {
-                display: inline-block;
-                width: 40px;
-                height: 40px;
-                border: 4px solid rgba(0,0,0,0.1);
-                border-radius: 50%;
-                border-top-color: #3498db;
-                animation: spin 1s ease-in-out infinite;
-                margin-bottom: 10px;
-            }
-            @keyframes spin {
-                to { transform: rotate(360deg); }
-            }
-            .search-result-item {
-                display: flex;
-                margin-bottom: 15px;
-                padding-bottom: 15px;
-                border-bottom: 1px solid #eee;
-            }
-            .search-result-item:last-child {
-                border-bottom: none;
-            }
-            .search-result-cover {
-                width: 80px;
-                height: 80px;
-                margin-right: 15px;
-                flex-shrink: 0;
-                border-radius: 4px;
-                overflow: hidden;
-                background-color: #f0f0f0;
-            }
-            .search-result-cover img {
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-            }
-            .search-result-info {
-                flex-grow: 1;
-            }
-            .search-result-title {
-                font-weight: bold;
-                margin-bottom: 5px;
-            }
-            .search-result-artist {
-                color: #666;
-                font-size: 14px;
-                margin-bottom: 5px;
-            }
-            .search-result-date {
-                color: #888;
-                font-size: 12px;
-            }
-            .search-result-rating {
-                min-width: 40px;
-                height: 40px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 50%;
-                color: white;
-                font-weight: bold;
-                margin-left: 10px;
-                flex-shrink: 0;
-            }
-            .no-search-results {
-                text-align: center;
-                padding: 30px;
-                color: #666;
-            }
-            .search-result-actions {
-                display: flex;
-                margin-top: 5px;
-            }
-            .search-result-actions button {
-                background: #f0f0f0;
-                border: none;
-                border-radius: 4px;
-                padding: 4px 8px;
-                margin-right: 8px;
-                font-size: 12px;
-                cursor: pointer;
-            }
-            .search-result-actions button:hover {
-                background: #e0e0e0;
-            }
-        `;
-        document.head.appendChild(style);
-        
         // Set up search event listeners
         const searchBar = document.querySelector('.search-bar input');
         const searchLoading = document.querySelector('.search-results-loading');
@@ -190,15 +52,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (searchBar) {
             // Add search icon
             searchIcon.innerHTML = '🔍';
-            searchIcon.style.position = 'absolute';
-            searchIcon.style.right = '10px';
-            searchIcon.style.top = '50%';
-            searchIcon.style.transform = 'translateY(-50%)';
-            searchIcon.style.cursor = 'pointer';
+            searchIcon.className = 'search-icon';
             
             // Add positioning to search bar container
             const searchBarContainer = document.querySelector('.search-bar');
-            searchBarContainer.style.position = 'relative';
             searchBarContainer.appendChild(searchIcon);
             
             // Function to perform search
@@ -300,7 +157,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // Show number of results
                 const resultCount = document.createElement('div');
-                resultCount.style.marginBottom = '20px';
+                resultCount.className = 'search-result-count';
                 resultCount.innerHTML = `<strong>${results.length} albums found</strong> for "${query}"`;
                 resultsContainer.appendChild(resultCount);
                 
