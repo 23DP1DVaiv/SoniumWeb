@@ -309,7 +309,32 @@ class AlbumLibrary {
             });
         }
         
-        // Add more event listeners for filtering, sorting, etc.
+        // Set up filter buttons if they exist
+        const filterButtons = document.querySelectorAll('.filter-button');
+        if (filterButtons.length > 0) {
+            filterButtons.forEach(button => {
+                button.addEventListener('click', () => {
+                    // Remove active class from all buttons
+                    filterButtons.forEach(btn => btn.classList.remove('active'));
+                    
+                    // Add active class to clicked button
+                    button.classList.add('active');
+                    
+                    // Apply filter
+                    const filterType = button.dataset.filter;
+                    this.applyFilter(filterType);
+                });
+            });
+        }
+        
+        // Set up sort options
+        const sortSelect = document.querySelector('#sort-select');
+        if (sortSelect) {
+            sortSelect.addEventListener('change', () => {
+                const sortBy = sortSelect.value;
+                this.sortAlbums(sortBy);
+            });
+        }
     }
     
     handleSearch(query) {
@@ -328,3 +353,208 @@ class AlbumLibrary {
         
         if (localResults.length > 0) {
             // Use local results if available
+            this.renderAlbums(localResults);
+            return;
+        }
+        
+        // If no local results, try to search via MusicBrainz API
+        this.searchMusicBrainz(query);
+    }
+    
+    async searchMusicBrainz(query) {
+        try {
+            console.log(`Searching MusicBrainz for: ${query}`);
+            
+            // Show loading state
+            const container = document.querySelector('.albums-grid');
+            if (container) {
+                container.innerHTML = '<div class="loading">Searching for albums...</div>';
+            }
+            
+            // Perform search
+            const data = await this.musicBrainzRequest('/release', {
+                query: query,
+                limit: 20
+            });
+            
+            if (!data || !data.releases || data.releases.length === 0) {
+                if (container) {
+                    container.innerHTML = '<div class="no-results">No albums found. Try a different search.</div>';
+                }
+                return;
+            }
+            
+            // Process search results
+            const searchResults = await Promise.all(data.releases.map(async (release) => {
+                // Get artist info
+                const artistName = release['artist-credit']?.[0]?.artist?.name || 'Unknown Artist';
+                const artistId = release['artist-credit']?.[0]?.artist?.id;
+                
+                // Get cover art
+                let coverUrl = await this.getCoverArtForRelease(release.id) || '/images/placeholder-album.jpg';
+                
+                // Generate a random rating (since MusicBrainz doesn't have ratings)
+                const rating = (3.5 + Math.random() * 1.5);
+                
+                return {
+                    id: release.id,
+                    title: release.title,
+                    artist: artistName,
+                    artist_id: artistId,
+                    cover_url: coverUrl,
+                    release_date: release.date || 'Unknown',
+                    rating: rating
+                };
+            }));
+            
+            // Display search results
+            this.renderAlbums(searchResults);
+            
+            // Add these albums to our library
+            await this.mergeAlbums(searchResults);
+            this.saveToLocalStorage();
+            
+        } catch (error) {
+            console.error('Error searching MusicBrainz:', error);
+            
+            const container = document.querySelector('.albums-grid');
+            if (container) {
+                container.innerHTML = '<div class="error">Error searching for albums. Please try again later.</div>';
+            }
+        }
+    }
+    
+    applyFilter(filterType) {
+        let filteredAlbums = [];
+        
+        switch (filterType) {
+            case 'recent':
+                // Show albums from the last month
+                const oneMonthAgo = new Date();
+                oneMonthAgo.setMonth(oneMonthAgo.getMonth() - 1);
+                
+                filteredAlbums = this.albums.filter(album => {
+                    if (album.release_date === 'Unknown') return false;
+                    return new Date(album.release_date) >= oneMonthAgo;
+                });
+                break;
+                
+            case 'top-rated':
+                // Show albums with rating >= 4.0
+                filteredAlbums = this.albums.filter(album => album.rating >= 4.0);
+                break;
+                
+            case 'favorites':
+                // In a real app, this would check user's favorites
+                // For demo, just show some random albums as favorites
+                filteredAlbums = this.albums.filter(() => Math.random() > 0.7);
+                break;
+                
+            default:
+                // Default to all albums
+                filteredAlbums = this.albums;
+        }
+        
+        this.renderAlbums(filteredAlbums);
+    }
+    
+    sortAlbums(sortBy) {
+        let sortedAlbums = [...this.albums]; // Create a copy to sort
+        
+        switch (sortBy) {
+            case 'date-desc':
+                // Newest first
+                sortedAlbums.sort((a, b) => {
+                    if (a.release_date === 'Unknown') return 1;
+                    if (b.release_date === 'Unknown') return -1;
+                    return new Date(b.release_date) - new Date(a.release_date);
+                });
+                break;
+                
+            case 'date-asc':
+                // Oldest first
+                sortedAlbums.sort((a, b) => {
+                    if (a.release_date === 'Unknown') return 1;
+                    if (b.release_date === 'Unknown') return -1;
+                    return new Date(a.release_date) - new Date(b.release_date);
+                });
+                break;
+                
+            case 'title':
+                // Alphabetical by title
+                sortedAlbums.sort((a, b) => a.title.localeCompare(b.title));
+                break;
+                
+            case 'artist':
+                // Alphabetical by artist
+                sortedAlbums.sort((a, b) => a.artist.localeCompare(b.artist));
+                break;
+                
+            case 'rating-desc':
+                // Highest rated first
+                sortedAlbums.sort((a, b) => b.rating - a.rating);
+                break;
+        }
+        
+        this.renderAlbums(sortedAlbums);
+    }
+    
+    // Add album to user's collection
+    addToCollection(albumId) {
+        // In a real app, this would add to user's database
+        // For demo purposes, just mark the album card
+        const albumCard = document.querySelector(`.album-card[data-id="${albumId}"]`);
+        if (albumCard) {
+            albumCard.classList.add('in-collection');
+            
+            // Show feedback to user
+            alert('Album added to your collection!');
+        }
+    }
+    
+    // Remove album from user's collection
+    removeFromCollection(albumId) {
+        // In a real app, this would remove from user's database
+        const albumCard = document.querySelector(`.album-card[data-id="${albumId}"]`);
+        if (albumCard) {
+            albumCard.classList.remove('in-collection');
+            
+            // Show feedback to user
+            alert('Album removed from your collection.');
+        }
+    }
+    
+    // Rate an album
+    rateAlbum(albumId, rating) {
+        // Find the album in our collection
+        const albumIndex = this.albums.findIndex(a => a.id === albumId);
+        if (albumIndex >= 0) {
+            // Update the rating
+            this.albums[albumIndex].rating = rating;
+            
+            // Update in local storage
+            this.saveToLocalStorage();
+            
+            // Update the UI
+            const ratingElement = document.querySelector(`.album-card[data-id="${albumId}"] .album-rating`);
+            if (ratingElement) {
+                ratingElement.textContent = rating.toFixed(1);
+                
+                // Update color based on rating
+                if (rating >= 4.5) {
+                    ratingElement.style.backgroundColor = '#28a745'; // Green for high ratings
+                } else if (rating >= 4.0) {
+                    ratingElement.style.backgroundColor = '#fd7e14'; // Orange for good ratings
+                } else {
+                    ratingElement.style.backgroundColor = '#6c757d'; // Gray for average ratings
+                }
+            }
+        }
+    }
+}
+
+// Initialize the album library when the script loads
+const albumLibrary = new AlbumLibrary();
+
+// Export for use in other modules
+export default albumLibrary;
